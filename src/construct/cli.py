@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import logging
 import sys
@@ -44,12 +45,19 @@ def _resolve_scenario_path(name: str) -> Path:
 
 
 def _make_frame_saver(frames_dir: Path):
-    """Return an ``on_step`` callback that writes each frame as a PNG."""
+    """Return an ``on_step`` callback that writes frames as PNGs.
+
+    Each step gets a subdirectory ``step_XXXX/`` containing one PNG per
+    frame: ``frame_0000.png``, ``frame_0001.png``, etc.
+    """
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    def _save(step_idx: int, step: StepResult, frame: np.ndarray) -> None:
-        path = frames_dir / f"step_{step_idx:04d}.png"
-        path.write_bytes(frame_to_png_bytes(frame))
+    def _save(step_idx: int, step: StepResult, frames: list[np.ndarray]) -> None:
+        step_dir = frames_dir / f"step_{step_idx:04d}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        for i, frame in enumerate(frames):
+            path = step_dir / f"frame_{i:04d}.png"
+            path.write_bytes(frame_to_png_bytes(frame))
 
     return _save
 
@@ -107,6 +115,9 @@ async def _run_command(args: argparse.Namespace) -> int:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     for scenario in scenarios:
+        if args.max_steps is not None:
+            scenario = dataclasses.replace(scenario, max_steps=args.max_steps)
+
         run_dir = Path("outputs") / f"{scenario.name}_{timestamp}"
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,7 +148,14 @@ def main(argv: list[str] | None = None) -> None:
     run_parser.add_argument("scenario", help="Scenario file name (e.g. 'example' for scenarios/example.py)")
     run_parser.add_argument("--no-frames", action="store_true", help="Skip saving video frames")
     run_parser.add_argument("--json", action="store_true", help="Output JSON to stdout")
+    run_parser.add_argument("--max-steps", type=int, default=None, help="Override max actions per scenario (default: use scenario value)")
     run_parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
+
+    view_parser = sub.add_parser("view", help="Browse run outputs in a web UI")
+    view_parser.add_argument("--outputs-dir", default="outputs", help="Outputs directory")
+    view_parser.add_argument("--port", type=int, default=8228, help="Server port")
+    view_parser.add_argument("--no-open", action="store_true", help="Don't open browser")
+    view_parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args(argv)
 
@@ -150,5 +168,14 @@ def main(argv: list[str] | None = None) -> None:
     else:
         logging.basicConfig(level=logging.WARNING)
 
-    exit_code = asyncio.run(_run_command(args))
+    if args.command == "run":
+        exit_code = asyncio.run(_run_command(args))
+    elif args.command == "view":
+        from construct.viewer import view_command
+
+        exit_code = view_command(args)
+    else:
+        parser.print_help()
+        exit_code = 0
+
     sys.exit(exit_code)

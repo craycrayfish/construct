@@ -25,6 +25,7 @@ src/construct/          # Package source
   gemini.py             # Gemini Robotics ER backend
   frame_utils.py        # numpy → PNG/base64
   report.py             # Console/JSON reporting
+  viewer.py             # Local web UI for browsing run outputs
   pytest_plugin.py      # Fixtures registered via entry-points.pytest11
   evaluators/           # exact, semantic, outcome, composite
 tests/                  # Self-tests using mock VLM + mocked Odyssey
@@ -35,6 +36,7 @@ tests/                  # Self-tests using mock VLM + mocked Odyssey
 ```bash
 uv sync --extra test     # Install all deps including test extras
 uv run pytest tests/ -v  # Run tests
+uv run construct view    # Browse run outputs in a local web UI
 ```
 
 ## Key patterns
@@ -44,6 +46,21 @@ uv run pytest tests/ -v  # Run tests
 - Frame callbacks from Odyssey are **sync** (not coroutines), called from an async background task.
 - The VLM backend is a Protocol — swap `GeminiRoboticsBackend` for any implementation matching `VLMBackend`.
 - Tests mock the Odyssey session with `AsyncMock` and use `MockVLMBackend` with pre-configured responses.
+
+## Viewer (`construct view`)
+
+A zero-dependency local web UI for browsing scenario run outputs. Serves a single-page app from Python's `http.server` with vanilla JS — no npm or extra packages.
+
+```bash
+construct view                          # serve outputs/ on port 8228, open browser
+construct view --port 9000              # custom port
+construct view --outputs-dir /path      # custom outputs directory
+construct view --no-open                # don't auto-open browser
+```
+
+The UI has a sidebar listing all runs (newest-first, with pass/fail badges) and a main panel showing scenario metadata, frame images, step-by-step navigation (arrow keys or buttons), and action details (name, parameters, reasoning, latency, cost).
+
+The server exposes a small JSON API (`/api/runs`, `/api/runs/<name>`) and serves frame PNGs from `/frames/<name>/<file>`. It binds to `127.0.0.1` only and rejects path-traversal attempts.
 
 ## Environment variables
 
