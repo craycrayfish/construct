@@ -97,9 +97,9 @@ class GeminiRoboticsBackend:
             types.Part.from_bytes(data=frame_bytes, mime_type="image/png"),
         ]
         if step_index == 0:
-            user_parts.append(f"Task: {scenario.prompt}\nObserve the scene and decide the next robot action.")
+            user_parts.append(types.Part.from_text(text=f"Task: {scenario.prompt}\nObserve the scene and decide the next robot action."))
         else:
-            user_parts.append("Observe the updated scene and decide the next robot action.")
+            user_parts.append(types.Part.from_text(text="Observe the updated scene and decide the next robot action."))
 
         user_content = types.Content(role="user", parts=user_parts)
 

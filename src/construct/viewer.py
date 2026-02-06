@@ -59,6 +59,8 @@ _VIEWER_HTML = """\
   .step-nav button:hover:not(:disabled) { background: #30363d; }
   .step-nav button:disabled { opacity: .4; cursor: default; }
   .step-counter { font-size: 14px; color: #8b949e; min-width: 100px; text-align: center; }
+  .anim-controls { display: flex; align-items: center; gap: 8px; }
+  .anim-counter { font-size: 12px; color: #8b949e; min-width: 60px; text-align: center; }
 
   /* Step detail */
   .step-detail { padding: 16px 20px; background: #161b22; overflow-y: auto; max-height: 200px; font-size: 13px; }
@@ -93,6 +95,10 @@ _VIEWER_HTML = """\
   let currentRun = null;
   let currentStep = 0;
   let runData = null;
+  let animFrameIdx = 0;
+  let animTimer = null;
+  let isPlaying = false;
+  const ANIM_FPS = 12;
 
   async function loadRuns() {
     const resp = await fetch('/api/runs');
@@ -129,14 +135,68 @@ _VIEWER_HTML = """\
     renderRun();
   }
 
+  function frameUrl(stepIdx, frameIdx) {
+    var run = encodeURIComponent(currentRun);
+    var fmt = runData.frame_format || 'flat';
+    if (fmt === 'nested') {
+      return '/frames/' + run + '/step_' + String(stepIdx).padStart(4, '0')
+        + '/frame_' + String(frameIdx).padStart(4, '0') + '.png';
+    }
+    return '/frames/' + run + '/step_' + String(stepIdx).padStart(4, '0') + '.png';
+  }
+
+  function stepFrameCount() {
+    var fps = runData.frames_per_step || [];
+    return fps[currentStep] || 0;
+  }
+
+  function stopAnim() {
+    if (animTimer) { clearInterval(animTimer); animTimer = null; }
+    isPlaying = false;
+  }
+
+  function startAnim() {
+    var total = stepFrameCount();
+    if (total <= 1) return;
+    isPlaying = true;
+    animTimer = setInterval(function() {
+      animFrameIdx++;
+      if (animFrameIdx >= total) {
+        animFrameIdx = total - 1;
+        stopAnim();
+        var btn = document.getElementById('playBtn');
+        if (btn) btn.textContent = '\\u25B6';
+        return;
+      }
+      var img = document.getElementById('frameImg');
+      if (img) img.src = frameUrl(currentStep, animFrameIdx);
+      var ctr = document.getElementById('animCounter');
+      if (ctr) ctr.textContent = (animFrameIdx + 1) + ' / ' + total;
+    }, 1000 / ANIM_FPS);
+  }
+
+  function toggleAnim() {
+    if (isPlaying) { stopAnim(); } else { startAnim(); }
+    var btn = document.getElementById('playBtn');
+    if (btn) btn.textContent = isPlaying ? '\\u23F8' : '\\u25B6';
+  }
+
+  function goToStep(idx) {
+    stopAnim();
+    currentStep = idx;
+    animFrameIdx = 0;
+    renderRun();
+  }
+
   function renderRun() {
     if (!runData) return;
-    const d = runData;
-    const step = d.steps[currentStep] || null;
-    const totalSteps = d.steps.length;
-    const frameCount = d.frame_count || 0;
+    var d = runData;
+    var step = d.steps[currentStep] || null;
+    var totalSteps = d.steps.length;
+    var frameCount = d.frame_count || 0;
+    var nFrames = stepFrameCount();
 
-    let html = '';
+    var html = '';
 
     // Meta bar
     html += '<div class="meta-bar">';
@@ -156,9 +216,8 @@ _VIEWER_HTML = """\
 
     // Frame
     html += '<div class="frame-area">';
-    if (currentStep < frameCount) {
-      const fname = 'step_' + String(currentStep).padStart(4, '0') + '.png';
-      html += '<img src="/frames/' + encodeURIComponent(currentRun) + '/' + fname + '" alt="Frame ' + currentStep + '">';
+    if (currentStep < frameCount && nFrames > 0) {
+      html += '<img id="frameImg" src="' + frameUrl(currentStep, animFrameIdx) + '" alt="Frame ' + currentStep + '">';
     } else {
       html += '<div class="placeholder">No frame available for this step</div>';
     }
@@ -169,6 +228,12 @@ _VIEWER_HTML = """\
     html += '<button id="prevBtn"' + (currentStep <= 0 ? ' disabled' : '') + '>&larr;</button>';
     html += '<span class="step-counter">Step ' + (currentStep + 1) + ' / ' + totalSteps + '</span>';
     html += '<button id="nextBtn"' + (currentStep >= totalSteps - 1 ? ' disabled' : '') + '>&rarr;</button>';
+    if (nFrames > 1) {
+      html += '<span class="anim-controls">';
+      html += '<button id="playBtn">\\u25B6</button>';
+      html += '<span id="animCounter" class="anim-counter">' + (animFrameIdx + 1) + ' / ' + nFrames + '</span>';
+      html += '</span>';
+    }
     html += '</div>';
 
     // Step detail
@@ -193,10 +258,17 @@ _VIEWER_HTML = """\
     mainArea.innerHTML = html;
 
     // Bind nav buttons
-    const prevBtn = document.getElementById('prevBtn');
-    const nextBtn = document.getElementById('nextBtn');
-    if (prevBtn) prevBtn.addEventListener('click', function() { if (currentStep > 0) { currentStep--; renderRun(); } });
-    if (nextBtn) nextBtn.addEventListener('click', function() { if (currentStep < totalSteps - 1) { currentStep++; renderRun(); } });
+    var prevBtn = document.getElementById('prevBtn');
+    var nextBtn = document.getElementById('nextBtn');
+    if (prevBtn) prevBtn.addEventListener('click', function() { if (currentStep > 0) goToStep(currentStep - 1); });
+    if (nextBtn) nextBtn.addEventListener('click', function() { if (currentStep < totalSteps - 1) goToStep(currentStep + 1); });
+
+    // Bind play/pause
+    var playBtn = document.getElementById('playBtn');
+    if (playBtn) playBtn.addEventListener('click', toggleAnim);
+
+    // Auto-play if multi-frame
+    if (nFrames > 1) startAnim();
   }
 
   function esc(s) {
@@ -208,8 +280,9 @@ _VIEWER_HTML = """\
 
   document.addEventListener('keydown', function(e) {
     if (!runData) return;
-    if (e.key === 'ArrowLeft' && currentStep > 0) { currentStep--; renderRun(); }
-    if (e.key === 'ArrowRight' && currentStep < runData.steps.length - 1) { currentStep++; renderRun(); }
+    if (e.key === 'ArrowLeft' && currentStep > 0) goToStep(currentStep - 1);
+    if (e.key === 'ArrowRight' && currentStep < runData.steps.length - 1) goToStep(currentStep + 1);
+    if (e.key === ' ') { e.preventDefault(); if (stepFrameCount() > 1) toggleAnim(); }
   });
 
   loadRuns();

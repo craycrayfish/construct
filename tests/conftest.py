@@ -1,8 +1,7 @@
-"""Shared test fixtures — mock VLM backend and mocked Odyssey session."""
+"""Shared test fixtures — mock VLM backend and simulate-based Odyssey mocks."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -60,37 +59,60 @@ def dummy_frame():
 
 
 @pytest.fixture()
-def mock_odyssey_session(dummy_frame):
-    """Patches OdysseySession to avoid real network calls.
+def mock_simulate(dummy_frame):
+    """Patch Odyssey.simulate, get_simulate_status, download_video, and extract_last_frame.
 
-    Returns frames from a list, advancing on each interact() call.
+    Returns a factory that accepts an optional list of frames (one per clip).
+    Each call to simulate returns a completed job with a mock video URL,
+    and extract_last_frame returns the corresponding frame from the list.
     """
 
     def _factory(frames: list[np.ndarray] | None = None):
-        frame_list = frames or [dummy_frame, dummy_frame, dummy_frame]
-        frame_idx = [0]
+        frame_list = frames or [dummy_frame] * 10
+        clip_idx = [0]
 
-        session = AsyncMock()
-        session.connect = AsyncMock()
-        session.disconnect = AsyncMock()
-        session.start_stream = AsyncMock(return_value="mock-stream-id")
-        session.end_stream = AsyncMock()
+        # Build a fake SimulationJobDetail
+        def _make_job(status="completed", error_message=None):
+            stream = MagicMock()
+            stream.video_url = f"https://mock.video/scene_{clip_idx[0]}.mp4"
 
-        async def _wait_for_frame(timeout=None):
-            idx = min(frame_idx[0], len(frame_list) - 1)
-            return frame_list[idx]
+            job = MagicMock()
+            job.job_id = f"job-{clip_idx[0]}"
+            job.status = _status_enum(status)
+            job.streams = [stream]
+            job.error_message = error_message
+            return job
 
-        session.wait_for_frame = AsyncMock(side_effect=_wait_for_frame)
+        def _status_enum(status_str):
+            from odyssey import SimulationJobStatus
+            return SimulationJobStatus(status_str)
 
-        async def _interact(prompt):
-            frame_idx[0] += 1
+        async def _simulate(*, script=None, scripts=None, script_url=None, portrait=True):
+            job = _make_job()
+            clip_idx[0] += 1
+            return job
 
-        session.interact = AsyncMock(side_effect=_interact)
+        async def _get_status(job_id):
+            return _make_job()
 
-        # Make it work as an async context manager
-        session.__aenter__ = AsyncMock(return_value=session)
-        session.__aexit__ = AsyncMock(return_value=False)
+        def _extract_last_frame(video_path):
+            idx = min(clip_idx[0] - 1, len(frame_list) - 1)
+            return frame_list[max(0, idx)]
 
-        return session
+        async def _download_video(url, dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.touch()
+            return dest
+
+        patches = (
+            patch("construct.runner.Odyssey", return_value=MagicMock(
+                simulate=AsyncMock(side_effect=_simulate),
+                get_simulate_status=AsyncMock(side_effect=_get_status),
+            )),
+            patch("construct.runner.download_video", side_effect=_download_video),
+            patch("construct.runner.extract_last_frame", side_effect=_extract_last_frame),
+        )
+
+        return patches
 
     return _factory

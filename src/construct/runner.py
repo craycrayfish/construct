@@ -1,10 +1,14 @@
-"""ScenarioRunner — core simulation loop."""
+"""ScenarioRunner — core simulation loop using the Odyssey simulate API."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import tempfile
 import time
+from pathlib import Path
+
+from odyssey import Odyssey, SimulationJobStatus
 
 from construct.config import ConstructConfig
 from construct.evaluator import Evaluator
@@ -14,39 +18,77 @@ from construct.models import (
     StepResult,
     TerminationReason,
 )
-from construct.session import OdysseySession
+from construct.prompt import PromptBuilder, default_prompt_builder
+from construct.video_utils import download_video, extract_last_frame
 from construct.vlm import VLMBackend
 
 logger = logging.getLogger(__name__)
 
 
 class ScenarioRunner:
-    """Runs a scenario through the Odyssey ↔ VLM loop and evaluates the result."""
+    """Runs a scenario through simulate → VLM clip-chaining loop and evaluates the result."""
 
     def __init__(
         self,
         config: ConstructConfig,
         vlm: VLMBackend,
         evaluators: list[Evaluator] | None = None,
+        prompt_builder: PromptBuilder | None = None,
+        clip_duration_s: float = 5.0,
+        poll_interval_s: float = 2.0,
     ) -> None:
         self._config = config
         self._vlm = vlm
         self._evaluators = evaluators or []
+        self._prompt_builder = prompt_builder or default_prompt_builder
+        self._clip_duration_s = clip_duration_s
+        self._poll_interval_s = poll_interval_s
+
+    async def _run_clip(
+        self,
+        client: Odyssey,
+        prompt: str,
+        image,
+        portrait: bool,
+    ):
+        """Submit a simulate job, poll until completion, and return the job detail."""
+        script = [
+            {
+                "timestamp_ms": 0,
+                "start": {"prompt": prompt, "image": image},
+            },
+            {
+                "timestamp_ms": int(self._clip_duration_s * 1000),
+                "end": {},
+            },
+        ]
+        job = await client.simulate(script=script, portrait=portrait)
+
+        while job.status not in (SimulationJobStatus.COMPLETED, SimulationJobStatus.FAILED):
+            await asyncio.sleep(self._poll_interval_s)
+            job = await client.get_simulate_status(job.job_id)
+
+        if job.status == SimulationJobStatus.FAILED:
+            msg = job.error_message or "Simulation job failed"
+            raise RuntimeError(msg)
+
+        return job
 
     async def run(self, scenario: Scenario, on_step=None) -> ScenarioResult:
         result = ScenarioResult(scenario=scenario)
         t0 = time.monotonic()
 
         try:
-            async with OdysseySession(self._config) as session:
-                await session.start_stream(
-                    prompt=scenario.prompt,
-                    portrait=scenario.portrait,
-                    image=scenario.image,
-                )
+            client = Odyssey(api_key=self._config.odyssey_api_key)
 
-                # Wait for the first frame before entering the loop
-                frame = await session.wait_for_frame(timeout=scenario.timeout_s)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp = Path(tmp_dir)
+
+                # Scene 0: initial clip from scenario prompt
+                current_prompt = scenario.prompt
+                job = await self._run_clip(client, current_prompt, scenario.image, scenario.portrait)
+                video_path = await download_video(job.streams[0].video_url, tmp / "scene_0.mp4")
+                frame = extract_last_frame(video_path)
 
                 for step_idx in range(scenario.max_steps):
                     elapsed = time.monotonic() - t0
@@ -83,13 +125,15 @@ class ScenarioRunner:
                         result.termination_reason = TerminationReason.DONE
                         break
 
-                    # Send action to Odyssey and wait for the next frame
-                    await session.interact(vlm_resp.action.to_interact_prompt())
-                    frame = await session.wait_for_frame(timeout=remaining)
+                    # Build next prompt and run next clip
+                    current_prompt = self._prompt_builder(current_prompt, vlm_resp.action)
+                    job = await self._run_clip(client, current_prompt, frame, scenario.portrait)
+                    video_path = await download_video(
+                        job.streams[0].video_url, tmp / f"scene_{step_idx + 1}.mp4"
+                    )
+                    frame = extract_last_frame(video_path)
                 else:
                     result.termination_reason = TerminationReason.MAX_STEPS
-
-                await session.end_stream()
 
         except asyncio.TimeoutError:
             result.termination_reason = TerminationReason.TIMEOUT

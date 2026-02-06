@@ -45,8 +45,23 @@ def _make_result_json(name="test_run", passed=True, steps=1, termination="done")
     })
 
 
-def _make_run_dir(outputs_dir: Path, name: str, *, passed=True, steps=2, frames=2):
-    """Create a mock run directory with result.json and optional frames."""
+def _make_run_dir(
+    outputs_dir: Path,
+    name: str,
+    *,
+    passed=True,
+    steps=2,
+    frames=2,
+    nested_frames=False,
+    frames_per_step=3,
+):
+    """Create a mock run directory with result.json and optional frames.
+
+    If *nested_frames* is True, creates the new nested format with
+    ``step_XXXX/frame_XXXX.png`` subdirectories.  Otherwise creates
+    the legacy flat format with ``step_XXXX.png`` files directly in
+    the frames directory.
+    """
     run_dir = outputs_dir / name
     run_dir.mkdir(parents=True)
     (run_dir / "result.json").write_text(_make_result_json(name=name, passed=passed, steps=steps))
@@ -56,8 +71,15 @@ def _make_run_dir(outputs_dir: Path, name: str, *, passed=True, steps=2, frames=
         frames_dir.mkdir()
         frame = np.zeros((8, 8, 3), dtype=np.uint8)
         png_bytes = frame_to_png_bytes(frame)
-        for i in range(frames):
-            (frames_dir / f"step_{i:04d}.png").write_bytes(png_bytes)
+        if nested_frames:
+            for i in range(frames):
+                step_dir = frames_dir / f"step_{i:04d}"
+                step_dir.mkdir()
+                for j in range(frames_per_step):
+                    (step_dir / f"frame_{j:04d}.png").write_bytes(png_bytes)
+        else:
+            for i in range(frames):
+                (frames_dir / f"step_{i:04d}.png").write_bytes(png_bytes)
 
     return run_dir
 
@@ -132,7 +154,7 @@ class TestRunsListAPI:
 
 
 class TestRunDetailAPI:
-    def test_returns_result_with_frame_count(self, viewer_server):
+    def test_returns_result_with_frame_count_flat(self, viewer_server):
         base_url, outputs_dir = viewer_server
         _make_run_dir(outputs_dir, "detail_run", steps=3, frames=2)
 
@@ -142,6 +164,19 @@ class TestRunDetailAPI:
         assert data["scenario"]["name"] == "detail_run"
         assert len(data["steps"]) == 3
         assert data["frame_count"] == 2
+        assert data["frame_format"] == "flat"
+        assert data["frames_per_step"] == [1, 1]
+
+    def test_returns_result_with_nested_frames(self, viewer_server):
+        base_url, outputs_dir = viewer_server
+        _make_run_dir(outputs_dir, "nested_run", steps=2, frames=2, nested_frames=True, frames_per_step=4)
+
+        status, body, _ = _get(f"{base_url}/api/runs/nested_run")
+        assert status == 200
+        data = json.loads(body)
+        assert data["frame_format"] == "nested"
+        assert data["frame_count"] == 2
+        assert data["frames_per_step"] == [4, 4]
 
     def test_nonexistent_run_returns_404(self, viewer_server):
         base_url, _ = viewer_server
@@ -156,15 +191,27 @@ class TestRunDetailAPI:
         assert status == 200
         data = json.loads(body)
         assert data["frame_count"] == 0
+        assert data["frame_format"] == "flat"
+        assert data["frames_per_step"] == []
 
 
 class TestFrameServing:
-    def test_serves_correct_png_bytes(self, viewer_server):
+    def test_serves_correct_png_bytes_flat(self, viewer_server):
         base_url, outputs_dir = viewer_server
         run_dir = _make_run_dir(outputs_dir, "frame_run", frames=1)
         expected = (run_dir / "frames" / "step_0000.png").read_bytes()
 
         status, body, ct = _get(f"{base_url}/frames/frame_run/step_0000.png")
+        assert status == 200
+        assert "image/png" in ct
+        assert body == expected
+
+    def test_serves_nested_frame(self, viewer_server):
+        base_url, outputs_dir = viewer_server
+        run_dir = _make_run_dir(outputs_dir, "nested_frame_run", frames=1, nested_frames=True, frames_per_step=2)
+        expected = (run_dir / "frames" / "step_0000" / "frame_0000.png").read_bytes()
+
+        status, body, ct = _get(f"{base_url}/frames/nested_frame_run/step_0000/frame_0000.png")
         assert status == 200
         assert "image/png" in ct
         assert body == expected

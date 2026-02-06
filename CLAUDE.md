@@ -11,6 +11,7 @@ A testing framework for VLMs controlling robotic systems. Odyssey (world model) 
 - `google-genai` — Gemini Robotics ER backend
 - `pytest` + `pytest-asyncio` — test runner
 - `numpy` + `pillow` — frame handling
+- `av` (PyAV) — video frame extraction from simulation clips
 
 ## Project layout
 
@@ -20,8 +21,9 @@ src/construct/          # Package source
   vlm.py                # VLMBackend Protocol, VLMResponse
   evaluator.py          # Evaluator Protocol, EvalScore
   config.py             # ConstructConfig (env vars)
-  session.py            # OdysseySession (async ctx manager, frame sync)
-  runner.py             # ScenarioRunner (core simulation loop)
+  runner.py             # ScenarioRunner (simulate-based clip-chaining loop)
+  prompt.py             # PromptBuilder type, default_prompt_builder
+  video_utils.py        # download_video, extract_last_frame (PyAV)
   gemini.py             # Gemini Robotics ER backend
   frame_utils.py        # numpy → PNG/base64
   report.py             # Console/JSON reporting
@@ -42,10 +44,10 @@ uv run construct view    # Browse run outputs in a local web UI
 ## Key patterns
 
 - All Odyssey and VLM calls are async. Tests use `asyncio_mode = "auto"`.
-- `OdysseySession` uses `asyncio.Event` for frame sync: `interact()` clears the event, the frame callback sets it, `wait_for_frame()` awaits it.
-- Frame callbacks from Odyssey are **sync** (not coroutines), called from an async background task.
+- `ScenarioRunner` uses the Odyssey **simulate API** for clip-chaining: each VLM decision produces a new simulation clip. The last frame of clip N becomes the starting image of clip N+1, and prompts accumulate via a pluggable `PromptBuilder` function.
+- The simulate loop: `simulate(script)` → poll `get_simulate_status()` → download video → `extract_last_frame()` (PyAV) → VLM decides → repeat.
 - The VLM backend is a Protocol — swap `GeminiRoboticsBackend` for any implementation matching `VLMBackend`.
-- Tests mock the Odyssey session with `AsyncMock` and use `MockVLMBackend` with pre-configured responses.
+- Tests mock `Odyssey.simulate`, `download_video`, and `extract_last_frame` and use `MockVLMBackend` with pre-configured responses.
 
 ## Viewer (`construct view`)
 

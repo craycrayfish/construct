@@ -9,8 +9,9 @@ from construct.evaluators.semantic import SemanticEvaluator
 from construct.loader import load_scenario_file, load_scenarios
 from construct.models import Action, Scenario, ScenarioResult, StepResult, TerminationReason
 from construct.report import StructuredReport
+from construct.prompt import PromptBuilder, default_prompt_builder
 from construct.runner import ScenarioRunner
-from construct.session import OdysseySession
+from construct.video_utils import download_video, extract_last_frame
 from construct.vlm import VLMBackend, VLMResponse
 
 __all__ = [
@@ -23,8 +24,8 @@ __all__ = [
     "ExactPathEvaluator",
     "load_scenario_file",
     "load_scenarios",
-    "OdysseySession",
     "OutcomeEvaluator",
+    "PromptBuilder",
     "Scenario",
     "ScenarioResult",
     "ScenarioRunner",
@@ -32,6 +33,9 @@ __all__ = [
     "StepResult",
     "StructuredReport",
     "TerminationReason",
+    "default_prompt_builder",
+    "download_video",
+    "extract_last_frame",
     "VLMBackend",
     "VLMResponse",
 ]

@@ -351,6 +351,7 @@ name = "construct"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "av" },
     { name = "google-genai" },
     { name = "numpy" },
     { name = "odyssey" },
@@ -372,6 +373,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av" },
     { name = "construct", extras = ["test"], marker = "extra == 'dev'" },
     { name = "google-genai" },
     { name = "mypy", marker = "extra == 'dev'" },

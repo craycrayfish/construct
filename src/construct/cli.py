@@ -45,19 +45,19 @@ def _resolve_scenario_path(name: str) -> Path:
 
 
 def _make_frame_saver(frames_dir: Path):
-    """Return an ``on_step`` callback that writes frames as PNGs.
+    """Return an ``on_step`` callback that writes the VLM decision frame as a PNG.
 
-    Each step gets a subdirectory ``step_XXXX/`` containing one PNG per
-    frame: ``frame_0000.png``, ``frame_0001.png``, etc.
+    Each step gets a subdirectory ``step_XXXX/`` containing a single
+    ``frame_0000.png`` — the last frame of the simulation clip that the
+    VLM evaluated.
     """
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    def _save(step_idx: int, step: StepResult, frames: list[np.ndarray]) -> None:
+    def _save(step_idx: int, step: StepResult, frame: np.ndarray) -> None:
         step_dir = frames_dir / f"step_{step_idx:04d}"
         step_dir.mkdir(parents=True, exist_ok=True)
-        for i, frame in enumerate(frames):
-            path = step_dir / f"frame_{i:04d}.png"
-            path.write_bytes(frame_to_png_bytes(frame))
+        path = step_dir / "frame_0000.png"
+        path.write_bytes(frame_to_png_bytes(frame))
 
     return _save
 

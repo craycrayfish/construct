@@ -10,6 +10,7 @@ dependencies = [
     "google-genai",
     "pillow",
     "python-dotenv",
+    "av",
 ]
 
 [project.optional-dependencies]
